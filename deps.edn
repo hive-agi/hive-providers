@@ -30,5 +30,6 @@
               :main-opts   ["-m" "cljs.main" "-re" "node" "-m" "hive-providers.test-runner"]}
 
   ;; Build + Clojars deploy: clojure -T:build jar | clojure -T:build deploy
-  :build {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.22"}}
+  :build {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.28"}}
+          :jvm-opts ["-Xmx1g"]
           :ns-default hive-build.api}}}
