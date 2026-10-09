@@ -4,7 +4,8 @@
 
    SPDX-License-Identifier: MIT"
   (:require [clojure.string :as str]
-            [hive-providers.text :as text]))
+            [hive-providers.text :as text]
+            [hive-dsl.adt :refer [defadt]]))
 
 (def retryable-statuses
   "Transient statuses: rate limit, overload, and the credit errors gateways
@@ -49,16 +50,21 @@
    (let [base (min max-ms (* initial-ms (reduce * 1 (repeat attempt 2))))]
      (long (+ base (* jitter (quot base 4)))))))
 
+(defadt Step
+  "What follows one HTTP attempt."
+  :step/done
+  [:step/retry {:wait-ms number?}]
+  [:step/fail {:category keyword?}])
+
 (defn next-step
-  "What to do after attempt ATTEMPT (0-based) produced RESP:
-   {:action :done} for a 2xx, {:action :retry :wait-ms n}, or
-   {:action :fail :category kw}."
+  "The Step after attempt ATTEMPT (0-based) produced RESP: done on a 2xx,
+   retry after :wait-ms, or fail with a :category."
   ([resp attempt jitter] (next-step default-policy resp attempt jitter))
   ([{:keys [max-retries] :as policy} resp attempt jitter]
    (let [status (:status resp)]
      (cond
-       (and status (<= 200 status 299))                 {:action :done}
-       (and (retryable? resp) (< attempt max-retries))  {:action  :retry
-                                                         :wait-ms (or (retry-after-ms resp)
-                                                                      (backoff-ms policy attempt jitter))}
-       :else                                            {:action :fail :category (category resp)}))))
+       (and status (<= 200 status 299))                 (->step :step/done)
+       (and (retryable? resp) (< attempt max-retries))  (step :step/retry
+                                                              {:wait-ms (or (retry-after-ms resp)
+                                                                            (backoff-ms policy attempt jitter))})
+       :else                                            (step :step/fail {:category (category resp)})))))

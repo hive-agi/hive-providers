@@ -6,7 +6,8 @@
    records; no flow in the library names a concretion.
 
    SPDX-License-Identifier: MIT"
-  (:require [hive-providers.effect :as fx]))
+  (:require [hive-providers.effect :as fx]
+            [clojure.string :as str]))
 
 (defprotocol IHttpClient
   (request! [this request]
@@ -41,19 +42,44 @@
   (load-token [this key] "The token map stored under KEY, or nil.")
   (save-token! [this key value] "Store the token map VALUE under KEY."))
 
+(defprotocol ISecretStore
+  (secret [this ref]
+    "Plaintext of the secret REF names, or nil when it cannot be resolved.
+     A REF is a string \"backend:key\" (\"env:VENICE_API_KEY\",
+     \"pass:Venice/key\") or a map {:backend kw :key string}. Expose the
+     value as late as possible: the library passes it straight into a
+     request header."))
+
 (defn handlers
   "Effect handlers for whichever ports PORTS (a map) carries:
    {:http IHttpClient :clock IClock :entropy IEntropy :sleeper ISleeper
-    :env IEnvironment :store ITokenStore}."
-  [{:keys [http clock entropy sleeper env store]}]
+    :env IEnvironment :store ITokenStore :secrets ISecretStore}."
+  [{:keys [http clock entropy sleeper env store secrets]}]
   (cond-> {}
     http    (assoc :http/request (fn [req] (request! http req)))
     clock   (assoc :clock/now-ms (fn [_] (now-ms clock)))
     entropy (assoc :entropy/bytes (fn [{:keys [n]}] (random-bytes entropy n)))
     sleeper (assoc :sleep/ms (fn [{:keys [ms]}] (sleep! sleeper ms)))
     env     (assoc :env/get (fn [{:keys [name]}] (env-var env name)))
+    secrets (assoc :secret/get (fn [{:keys [ref]}] (secret secrets ref)))
     store   (assoc :store/load (fn [{:keys [key]}] (load-token store key))
                    :store/save (fn [{:keys [key value]}] (save-token! store key value)))))
+
+(defn parse-secret-ref
+  "{:backend kw :key string} for a REF string \"backend:key\" or map, or nil."
+  [ref]
+  (cond
+    (map? ref) ref
+    (string? ref) (let [i (str/index-of ref ":")]
+                    (when (and i (pos? i))
+                      {:backend (keyword (subs ref 0 i)) :key (subs ref (inc i))}))
+    :else nil))
+
+(defrecord EnvSecrets [env]
+  ISecretStore
+  (secret [_ ref]
+    (let [{:keys [backend key]} (parse-secret-ref ref)]
+      (when (= :env backend) (env-var env key)))))
 
 (defn run
   "Run PROGRAM synchronously against PORTS (see `handlers`) and EXTRA

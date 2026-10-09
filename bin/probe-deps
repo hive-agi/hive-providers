@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Probe whether hive-dsl and malli load on each dialect (dev/dep_probe.cljc).
+#   HIVE_DSL_SRC  hive-dsl source dir   (default ../hive-dsl/src)
+#   MALLI_SRC     malli source dir      (default ~/PP/malli/src)
+#   CLJRS         clojurust binary      (default cljrs)
+set -u
+cd "$(dirname "$0")/.." || exit 1
+DSL="${HIVE_DSL_SRC:-../hive-dsl/src}"
+MALLI="${MALLI_SRC:-$HOME/PP/malli/src}"
+CLJRS="${CLJRS:-cljrs}"
+DYN="target/probe-deps/dynaload"
+mkdir -p "$DYN"
+jar=$(find "$HOME/.m2/repository/borkdude/dynaload" -name '*.jar' | sort -V | tail -1)
+[ -n "$jar" ] && (cd "$DYN" && unzip -qo "$jar")
+CP="$DSL:$MALLI:$DYN:dev"
+echo "== bb";    timeout 100 bb -cp "$CP" dev/dep_probe.cljc 2>&1 | tail -8
+echo "== cljw";  timeout 100 cljw -cp "$CP" dev/dep_probe.cljc 2>&1 | tail -8
+echo "== cljrs"; timeout 100 "$CLJRS" run --src-path "$DSL" --src-path "$MALLI" --src-path "$DYN" dev/dep_probe.cljc 2>&1 | tail -8
+echo "== lpy";   timeout 100 basilisp run --include-path "$DSL" --include-path "$MALLI" --include-path "$DYN" dev/dep_probe.cljc 2>&1 | grep -vE '^\s+(File|\^)' | tail -6

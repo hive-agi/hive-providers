@@ -75,11 +75,11 @@
                               (hive-providers-codec-utf8-encode "{\"exp\":100}"))
                       ".sig"))))
 
-(when (smoke-load hive-providers-openai-retry)
-  (smoke-gap "retry category"
-             "clel drops keyword namespaces (:llm/unauthorized reads as :unauthorized)"
-             :llm/unauthorized
-             (hive-providers-openai-retry-category (clel-hash-map :status 401))))
+(smoke-gap "retry category"
+           "openai.retry builds its Step ADT with hive-dsl's defadt, which clel cannot compile; clel also drops keyword namespaces"
+           :llm/unauthorized
+           (progn (require 'hive-providers-openai-retry)
+                  (hive-providers-openai-retry-category (clel-hash-map :status 401))))
 
 (when (smoke-load hive-providers-oauth-pkce)
   (smoke-check "pkce rfc7636"

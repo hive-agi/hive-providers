@@ -13,7 +13,8 @@
             [hive-providers.codec.json :as json]
             [hive-providers.effect :as fx]
             [hive-providers.oauth.token :as token]
-            [hive-providers.result :as r]))
+            [hive-providers.result :as r]
+            [hive-dsl.adt :refer [defadt adt-case]]))
 
 (defn authorization-request
   "Request for a device code and user code (RFC 8628 3.1)."
@@ -48,17 +49,22 @@
                        :interval-s                (or (:interval d) 5)})
                 (r/err :oauth/bad-response {:message "no device_code or user_code"}))))))
 
-(defn poll-outcome
-  "Classify one token-endpoint answer while polling (RFC 8628 3.5):
-   {:status :approved :token t} | {:status :pending} | {:status :slow-down}
-   | {:status :failed :error result}."
+(defadt PollOutcome
+  "One token-endpoint answer while polling a device authorization."
+  [:poll/approved {:token map?}]
+  :poll/pending
+  :poll/slow-down
+  [:poll/failed {:error map?}])
+
+(defn classify-poll
+  "The PollOutcome of one token-endpoint RESP while polling (RFC 8628 3.5)."
   [resp now-ms]
   (let [res (token/parse-response resp now-ms nil)]
     (cond
-      (r/ok? res)                                      {:status :approved :token (r/value res)}
-      (= :oauth/authorization_pending (:error res))    {:status :pending}
-      (= :oauth/slow_down (:error res))                {:status :slow-down}
-      :else                                            {:status :failed :error res})))
+      (r/ok? res)                                   (poll-outcome :poll/approved {:token (r/value res)})
+      (= :oauth/authorization_pending (:error res)) (->poll-outcome :poll/pending)
+      (= :oauth/slow_down (:error res))             (->poll-outcome :poll/slow-down)
+      :else                                         (poll-outcome :poll/failed {:error res}))))
 
 (defn poll-program
   "Program polling for the token of DEVICE-AUTH (from `parse-authorization`)
@@ -80,13 +86,16 @@
                        (fx/bind
                         (fx/perform :clock/now-ms)
                         (fn [now]
-                          (let [{:keys [status token error]} (poll-outcome resp now)]
-                            (cond
-                              (= status :approved)  (fx/done (r/ok token))
-                              (= status :failed)    (fx/done error)
-                              (>= now deadline)     (fx/done (r/err :oauth/expired_token))
-                              (= status :slow-down) (attempt (+ interval 5))
-                              :else                 (attempt interval))))))))))]
+                          (let [outcome (classify-poll resp now)
+                                waited  (fn [next-interval]
+                                          (if (>= now deadline)
+                                            (fx/done (r/err :oauth/expired_token))
+                                            (attempt next-interval)))]
+                            (adt-case PollOutcome outcome
+                              :poll/approved  (fx/done (r/ok (:token outcome)))
+                              :poll/failed    (fx/done (:error outcome))
+                              :poll/slow-down (waited (+ interval 5))
+                              :poll/pending   (waited interval))))))))))]
          (attempt interval-s))))))
 
 (defn flow-program

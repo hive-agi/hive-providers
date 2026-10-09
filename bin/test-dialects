@@ -18,6 +18,25 @@ wanted=("$@")
 
 status=0
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# Non-JVM runtimes have no Maven: unpack the sources of the library's
+# dependencies (hive-dsl, malli, and malli's dynaload) from the jars the
+# Clojure CLI resolved, so every runtime reads the exact pinned versions.
+# HIVE_DSL_SRC / MALLI_SRC put a source checkout first (e.g. a fix branch).
+DEPS=target/dialect-deps
+if [ ! -d "$DEPS" ] || [ deps.edn -nt "$DEPS" ]; then
+  rm -rf "$DEPS"; mkdir -p "$DEPS"
+  for jar in $(clojure -Spath | tr ':' '\n' | grep -E '/(hive-dsl|malli|dynaload)/.*\.jar$'); do
+    (cd "$DEPS" && unzip -qo "$jar" -x 'META-INF/*')
+  done
+fi
+EXTRA="${HIVE_DSL_SRC:+$HIVE_DSL_SRC:}${MALLI_SRC:+$MALLI_SRC:}$DEPS"
+paths_flag() { # paths_flag FLAG -> FLAG p1 FLAG p2 ...
+  local IFS=:; for p in src test $EXTRA; do printf '%s\n%s\n' "$1" "$p"; done
+}
+mapfile -t RS_PATHS < <(paths_flag --src-path)
+# Basilisp prepends each -p to sys.path, so the LAST one wins: reverse.
+mapfile -t LPY_PATHS < <(paths_flag -p | paste - - | tac | tr '\t' '\n')
 run() {
   # Exit codes are not trusted alone: cljs.main exits 0 on test failures.
   # A run passes when it exits 0 AND its output reports no failure or error.
@@ -41,11 +60,11 @@ for d in "${wanted[@]}"; do
     clj)   have clojure  && run clj   timeout 600 clojure -M:test ;;
     cljs)  have node     && run cljs  timeout 600 clojure -M:cljs-test ;;
     bb)    have bb       && run bb    timeout 300 bb test ;;
-    cljw)  have cljw     && run cljw  timeout 300 cljw -cp src:test -m hive-providers.test-runner ;;
-    cljrs) have "$CLJRS" && run cljrs timeout 600 "$CLJRS" test --src-path src --src-path test \
+    cljw)  have cljw     && run cljw  timeout 300 cljw -cp "src:test:$EXTRA" -m hive-providers.test-runner ;;
+    cljrs) have "$CLJRS" && run cljrs timeout 600 "$CLJRS" test "${RS_PATHS[@]}" \
                               hive-providers.core-test hive-providers.oauth-test hive-providers.openai-test ;;
     # Basilisp's clojure.test runs under pytest (uv tool install basilisp --with pytest).
-    lpy)   have basilisp && run lpy   timeout 600 basilisp test -p src -p test test/hive_providers/*_test.cljc ;;
+    lpy)   have basilisp && run lpy   timeout 600 basilisp test "${LPY_PATHS[@]}" test/hive_providers/*_test.cljc ;;
     cljel) have clel     && run cljel bin/emit-dialect cljel --test ;;
     *)     echo "unknown dialect: $d"; status=1 ;;
   esac

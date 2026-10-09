@@ -101,12 +101,16 @@
     (is (= ["data: b" ""] l2))
     (is (= "" (:buffer s2)))))
 
+(defn- step-of [s] (dissoc s :adt/type))
+
 (deftest retry-policy
-  (is (= {:action :done} (retry/next-step {:status 200} 0 0)))
-  (is (= {:action :retry :wait-ms 3000} (retry/next-step {:status 429 :headers {"retry-after" "3"}} 0 0)))
-  (is (= {:action :retry :wait-ms 2000} (retry/next-step {:status 503} 1 0)))
-  (is (= {:action :fail :category :llm/unauthorized} (retry/next-step {:status 401} 0 0)))
-  (is (= {:action :fail :category :llm/rate-limited} (retry/next-step {:status 429} 5 0)))
+  (is (retry/step? (retry/next-step {:status 200} 0 0)))
+  (is (= {:adt/variant :step/done} (step-of (retry/next-step {:status 200} 0 0))))
+  (is (= {:adt/variant :step/retry :wait-ms 3000}
+         (step-of (retry/next-step {:status 429 :headers {"retry-after" "3"}} 0 0))))
+  (is (= {:adt/variant :step/retry :wait-ms 2000} (step-of (retry/next-step {:status 503} 1 0))))
+  (is (= {:adt/variant :step/fail :category :llm/unauthorized} (step-of (retry/next-step {:status 401} 0 0))))
+  (is (= {:adt/variant :step/fail :category :llm/rate-limited} (step-of (retry/next-step {:status 429} 5 0))))
   (is (= :llm/network (retry/category {:status nil})))
   (is (= 60000 (retry/backoff-ms 10 0))))
 

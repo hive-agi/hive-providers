@@ -104,13 +104,19 @@
 (defn handlers
   "Asynchronous effect handlers for every library op.
    OPTS: :stores maps a store key to a file path (a key with no entry is the
-   path itself)."
+   path itself); :secret, a (fn [ref] plaintext-or-nil) for :secret/get
+   (default resolves only \"env:NAME\" refs)."
   ([] (handlers {}))
-  ([{:keys [stores]}]
-   {:http/request  http-request!
-    :clock/now-ms  (fn [_ cb] (cb (js/Date.now)))
-    :entropy/bytes (fn [{:keys [n]} cb] (cb (random-bytes n)))
-    :sleep/ms      (fn [{:keys [ms]} cb] (js/setTimeout #(cb nil) ms))
-    :env/get       (fn [{:keys [name]} cb] (cb (aget (.-env js/process) name)))
-    :store/load    (fn [{:keys [key]} cb] (cb (read-json-file (get stores key key))))
-    :store/save    (fn [{:keys [key value]} cb] (cb (write-json-file! (get stores key key) value)))}))
+  ([{:keys [stores secret]}]
+   (let [env-secret (fn [ref]
+                      (let [i (when (string? ref) (str/index-of ref ":"))]
+                        (when (and i (= "env" (subs ref 0 i)))
+                          (aget (.-env js/process) (subs ref (inc i))))))]
+     {:http/request  http-request!
+      :clock/now-ms  (fn [_ cb] (cb (js/Date.now)))
+      :entropy/bytes (fn [{:keys [n]} cb] (cb (random-bytes n)))
+      :sleep/ms      (fn [{:keys [ms]} cb] (js/setTimeout #(cb nil) ms))
+      :env/get       (fn [{:keys [name]} cb] (cb (aget (.-env js/process) name)))
+      :secret/get    (fn [{:keys [ref]} cb] (cb ((or secret env-secret) ref)))
+      :store/load    (fn [{:keys [key]} cb] (cb (read-json-file (get stores key key))))
+      :store/save    (fn [{:keys [key value]} cb] (cb (write-json-file! (get stores key key) value)))})))

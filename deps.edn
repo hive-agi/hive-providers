@@ -1,16 +1,26 @@
 {:paths ["src"]
 
- ;; Self-contained: the library itself depends on Clojure and nothing else.
  ;; JSON, base64, URL encoding and SHA-256 are portable Clojure in src/, so the
- ;; same sources read on every dialect (see hive-providers.platform).
- :deps {org.clojure/clojure {:mvn/version "1.12.6"}}
+ ;; same sources read on every dialect (see hive-providers.platform). The two
+ ;; dependencies are portable cljc too:
+ ;;   hive-dsl  Results and closed ADTs (railway-oriented); result + adt
+ ;;             namespaces only, which require nothing but clojure.set/string.
+ ;;   malli     schemas for every boundary value (hive-providers.schema).
+ ;; hive-system is PROVIDED scope: only hive-providers.host.hive-system needs
+ ;; it, and a consumer that wants that adapter already has it (see README).
+ :deps {org.clojure/clojure {:mvn/version "1.12.6"}
+        io.github.hive-agi/hive-dsl {:mvn/version "0.5.36"}
+        metosin/malli {:mvn/version "0.20.2"}}
 
  :aliases
- {:dev  {:extra-paths ["dev" "test"]}
+ {;; hive-system appears only here: provided scope for host.hive-system.
+  :dev  {:extra-paths ["dev" "test"]
+         :extra-deps  {io.github.hive-agi/hive-system {:mvn/version "0.3.14"}}}
 
   :test {:extra-paths ["test"]
          :extra-deps  {io.github.cognitect-labs/test-runner
-                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                       io.github.hive-agi/hive-system {:mvn/version "0.3.14"}}
          :main-opts   ["-m" "cognitect.test-runner"]
          :exec-fn     cognitect.test-runner.api/test}
 

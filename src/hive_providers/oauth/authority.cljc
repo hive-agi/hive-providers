@@ -20,26 +20,34 @@
    SPDX-License-Identifier: MIT"
   (:require [hive-providers.effect :as fx]
             [hive-providers.oauth.token :as token]
-            [hive-providers.result :as r]))
+            [hive-providers.result :as r]
+            [hive-dsl.adt :refer [defadt adt-case]]))
 
 (def default-coalesce-ms
   "A refresh within this window satisfies a forced refresh."
   10000)
 
+(defadt Decision
+  "What to do with a stored token. Closed: `adt-case` over it is exhaustive."
+  :decision/absent
+  :decision/reuse
+  :decision/refresh)
+
 (defn decide
-  "One of :absent, :reuse or :refresh for the stored TOKEN.
+  "The Decision for the stored TOKEN.
    Options: :now-ms (required), :margin-ms, :force?, :coalesce-ms."
   [stored {:keys [now-ms margin-ms force? coalesce-ms]
            :or   {margin-ms   token/default-margin-ms
                   coalesce-ms default-coalesce-ms}}]
   (let [obtained (:obtained-at-ms stored)
         recent?  (and (number? obtained) (< (- now-ms obtained) coalesce-ms))]
-    (cond
-      (nil? (:access-token stored))                    :absent
-      (and force? recent?)                             :reuse
-      force?                                           :refresh
-      (token/expired? stored now-ms margin-ms)         :refresh
-      :else                                            :reuse)))
+    (->decision
+     (cond
+       (nil? (:access-token stored))            :decision/absent
+       (and force? recent?)                     :decision/reuse
+       force?                                   :decision/refresh
+       (token/expired? stored now-ms margin-ms) :decision/refresh
+       :else                                    :decision/reuse))))
 
 (defn access-program
   "Program yielding Result<token> for the credential stored under STORE-KEY.
@@ -60,14 +68,14 @@
          (fx/bind
           (fx/perform :clock/now-ms)
           (fn [now]
-            (case (decide stored (assoc opts :now-ms now))
-              :absent  (fx/done (r/err :oauth/no-credentials {:key store-key}))
-              :reuse   (fx/done (r/ok stored))
-              :refresh (fx/then-ok
-                        (token/refresh-program client stored (:refresh-opts opts))
-                        (fn [fresh]
-                          (fx/fmap (fx/perform :store/save {:key store-key :value (encode fresh raw)})
-                                   (fn [_] (r/ok fresh)))))))))))))
+            (adt-case Decision (decide stored (assoc opts :now-ms now))
+              :decision/absent  (fx/done (r/err :oauth/no-credentials {:key store-key}))
+              :decision/reuse   (fx/done (r/ok stored))
+              :decision/refresh (fx/then-ok
+                                 (token/refresh-program client stored (:refresh-opts opts))
+                                 (fn [fresh]
+                                   (fx/fmap (fx/perform :store/save {:key store-key :value (encode fresh raw)})
+                                            (fn [_] (r/ok fresh)))))))))))))
 
 (defn header-program
   "Program yielding Result<{\"Authorization\" \"Bearer ..\"}> for STORE-KEY."

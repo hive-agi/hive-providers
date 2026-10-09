@@ -176,15 +176,17 @@
 
 (defn ports
   "Port map for hive-providers.ports/run. OPTS: :stores (key -> path map for
-   the file store), :store (any ITokenStore, wins over :stores)."
+   the file store), :store (any ITokenStore, wins over :stores), :secrets
+   (any ISecretStore; default resolves only \"env:NAME\" refs)."
   ([] (ports {}))
-  ([{:keys [stores store]}]
+  ([{:keys [stores store secrets]}]
    (let [sys (->JvmSystem)]
      {:http    (->JvmHttp)
       :clock   sys
       :entropy sys
       :sleeper sys
       :env     sys
+      :secrets (or secrets (ports/->EnvSecrets sys))
       :store   (or store (file-store (or stores {})))})))
 
 (defn handlers
@@ -214,6 +216,12 @@
       (with-open [_ (.lock ch)]
         (f)))))
 
+(defn with-monitor
+  "Call F holding the in-process monitor for KEY: callers on one key
+   serialize, different keys proceed in parallel."
+  [key f]
+  (locking (monitor-for key) (f)))
+
 (defn single-flight
   "Run PROGRAM with HANDLERS while holding the monitor for KEY, so concurrent
    callers for one account serialize. With FILE, also hold an OS lock beside
@@ -221,7 +229,8 @@
    see the token the previous holder saved instead of refreshing again."
   ([handlers key program] (single-flight handlers key nil program))
   ([handlers key file program]
-   (locking (monitor-for key)
-     (if file
-       (with-file-lock file #(fx/run-sync handlers program))
-       (fx/run-sync handlers program)))))
+   (with-monitor key
+     (fn []
+       (if file
+         (with-file-lock file #(fx/run-sync handlers program))
+         (fx/run-sync handlers program))))))

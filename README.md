@@ -13,8 +13,26 @@ self-contained `.cljc` library that reads on every major Clojure dialect.
   parsing with tool-call reassembly, retry policy, and an `IChatProvider`
   protocol for harnesses to depend on.
 
-No dependency besides Clojure itself: JSON, base64, URL encoding, UTF-8 and
-SHA-256 are portable Clojure in `src/`.
+JSON, base64, URL encoding, UTF-8 and SHA-256 are portable Clojure in
+`src/`. The two dependencies are portable `.cljc` as well:
+
+- **hive-dsl**: Results are hive-dsl Results (`{:ok v}` / `{:error cat ...}`,
+  railway-oriented), and the closed sums in the flows are hive-dsl ADTs
+  (`oauth.authority/Decision`, `oauth.device/PollOutcome`, `openai.retry/Step`),
+  matched exhaustively with `adt-case`.
+- **malli**: `hive-providers.schema` describes every boundary value (HTTP
+  request/response, OAuth client and token, PKCE bundle, device authorization,
+  registry entry, chat params, message). `hive-providers.contracts` registers
+  function schemas for the public API, so `malli.instrument` can check a
+  running harness.
+
+**hive-system is provided scope.** Only `hive-providers.host.hive-system`
+needs it, and it is not in `:deps`: a harness that already runs hive-system
+(hive-agent, hive-mcp) gets `pass:`-backed secret refs and hive-system's file
+lock for the single-flight refresh. Every other namespace loads without it.
+Clojure loads per namespace but resolves dependencies per artifact, so keeping
+hive-system out of `:deps` is what keeps datahike, tink and the rest out of
+every consumer's classpath.
 
 ## Design: effects as data
 
@@ -36,7 +54,10 @@ asks the host for one operation and says how to continue
 ```
 
 Ops: `:http/request`, `:clock/now-ms`, `:entropy/bytes`, `:sleep/ms`,
-`:env/get`, `:store/load`, `:store/save`. The same ports exist as protocols
+`:env/get`, `:secret/get`, `:store/load`, `:store/save`. A registry entry
+may name `:api-key-ref` (`"pass:Venice/key"`, `"env:X"`); the secret store
+answers before the environment, so a stale shell variable cannot shadow the
+canonical key. The same ports exist as protocols
 (`hive-providers.ports`) with stub records for tests, so a harness depends
 on abstractions and injects concretions (DIP). Failures are values:
 `{:ok v}` or `{:error :category ...}`, the same shape as hive-dsl.
@@ -47,6 +68,7 @@ Host adapters:
 |---|---|---|
 | JVM, Babashka | `hive-providers.host.jvm` | `java.net.http`, `SecureRandom`, atomic owner-only JSON files, `single-flight` per-account lock (plus OS file lock) |
 | Node.js 18+ | `hive-providers.host.node` | `fetch` with chunked SSE reading, `crypto.randomBytes`, async handlers for `fx/run-async` |
+| JVM + hive-system | `hive-providers.host.hive-system` | provided scope: `pass:` secrets via hive-system's registry, single flight under hive-system's `fs-lock!` |
 | any other | your handlers | a map of op to fn; nothing else is required |
 
 ## OAuth example: share Claude Code's login

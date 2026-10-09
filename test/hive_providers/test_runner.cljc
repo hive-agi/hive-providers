@@ -1,17 +1,21 @@
 (ns hive-providers.test-runner
   "One entry point for the suite on every dialect. Exits non-zero on failure
    where the host has a process exit. Host-adapter tests join on their own
-   host: JVM/Babashka (not ClojureWasm, which also claims :clj) and Node."
+   host: JVM/Babashka (not ClojureWasm, which also claims :clj) and Node.
+   schema-test needs malli, which clojurust cannot load yet (its runner
+   names the namespaces it runs, see bin/test-dialects)."
   (:require [clojure.test :as t]
             [hive-providers.core-test]
             [hive-providers.oauth-test]
             [hive-providers.openai-test]
+            [hive-providers.schema-test]
             #?@(:cljw [] :clj [[hive-providers.host-jvm-test]] :cljs [[hive-providers.host-node-test]])))
 
 (def test-namespaces
   (into '[hive-providers.core-test
           hive-providers.oauth-test
-          hive-providers.openai-test]
+          hive-providers.openai-test
+          hive-providers.schema-test]
         #?(:cljw [] :clj '[hive-providers.host-jvm-test] :default [])))
 
 #?(:cljs
@@ -28,6 +32,7 @@
      (t/run-tests 'hive-providers.core-test
                   'hive-providers.oauth-test
                   'hive-providers.openai-test
+                  'hive-providers.schema-test
                   'hive-providers.host-node-test)
      :default
      (let [{:keys [fail error] :as summary} (apply t/run-tests test-namespaces)

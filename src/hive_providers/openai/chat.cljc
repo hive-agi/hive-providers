@@ -24,14 +24,30 @@
             [hive-providers.openai.request :as request]
             [hive-providers.openai.response :as response]
             [hive-providers.openai.retry :as retry]
-            [hive-providers.result :as r]))
+            [hive-providers.result :as r]
+            [hive-dsl.adt :refer [adt-case]]))
 
 ;; =============================================================================
 ;; Credentials
 ;; =============================================================================
 
+(defn- env-key-program
+  "Program yielding Result<key-or-nil> from ENTRY's :api-key-env, with
+   STORED (a value a secret store already answered) taking precedence."
+  [entry stored]
+  (if-let [env-var (:api-key-env entry)]
+    (fx/fmap (fx/perform :env/get {:name env-var})
+             (fn [v] (reg/choose-api-key entry {:stored stored :env v})))
+    (fx/done (reg/choose-api-key entry {:stored stored}))))
+
 (defn credential-program
-  "Program yielding Result<key-or-token-or-nil> for ENTRY and PARAMS."
+  "Program yielding Result<key-or-token-or-nil> for ENTRY and PARAMS.
+
+   Order: explicit :api-key; explicit :access-token; an OAuth authority
+   (:oauth params); for an OAuth entry nothing else; then the entry's
+   :api-key-ref through the :secret/get op (a secret store beats the
+   environment, so a stale shell variable cannot shadow the canonical key);
+   then :api-key-env through :env/get."
   ([entry params] (credential-program entry params false))
   ([entry params force-refresh?]
    (cond
@@ -51,12 +67,12 @@
      (fx/done (r/err :provider/missing-oauth-token
                      {:hint "pass :access-token or :oauth {:client :store-key}"}))
 
-     (:api-key-env entry)
-     (fx/fmap (fx/perform :env/get {:name (:api-key-env entry)})
-              (fn [v] (reg/choose-api-key entry {:env v})))
+     (:api-key-ref entry)
+     (fx/bind (fx/perform :secret/get {:ref (:api-key-ref entry)})
+              (fn [stored] (env-key-program entry stored)))
 
      :else
-     (fx/done (r/ok nil)))))
+     (env-key-program entry nil))))
 
 ;; =============================================================================
 ;; The request loop
@@ -92,11 +108,12 @@
   (letfn [(attempt [n]
             (fx/bind (fx/perform :http/request req)
                      (fn [resp]
-                       (let [{:keys [action wait-ms]} (retry/next-step policy resp n (jitter n))]
-                         (if (= action :retry)
-                           (fx/bind (fx/perform :sleep/ms {:ms wait-ms})
-                                    (fn [_] (attempt (inc n))))
-                           (fx/done [resp (inc n)]))))))]
+                       (let [step (retry/next-step policy resp n (jitter n))]
+                         (adt-case retry/Step step
+                           :step/retry (fx/bind (fx/perform :sleep/ms {:ms (:wait-ms step)})
+                                                (fn [_] (attempt (inc n))))
+                           :step/done  (fx/done [resp (inc n)])
+                           :step/fail  (fx/done [resp (inc n)]))))))]
     (attempt 0)))
 
 (defn chat-program

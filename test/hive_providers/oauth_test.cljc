@@ -98,12 +98,15 @@
   (is (= :oauth/no-refresh-token
          (:error (ports/run {} (token/refresh-program client {:access-token "x"}))))))
 
+(defn- variant [adt] (:adt/variant adt))
+
 (deftest authority-policy
-  (is (= :absent (auth/decide nil {:now-ms 0})))
-  (is (= :reuse (auth/decide {:access-token "a" :expires-at-ms 10000000} {:now-ms 0})))
-  (is (= :refresh (auth/decide {:access-token "a" :expires-at-ms 1000} {:now-ms 0})))
-  (is (= :refresh (auth/decide {:access-token "a"} {:now-ms 50000 :force? true})))
-  (is (= :reuse (auth/decide {:access-token "a" :obtained-at-ms 45000} {:now-ms 50000 :force? true})))
+  (is (= :decision/absent (variant (auth/decide nil {:now-ms 0}))))
+  (is (= :decision/reuse (variant (auth/decide {:access-token "a" :expires-at-ms 10000000} {:now-ms 0}))))
+  (is (= :decision/refresh (variant (auth/decide {:access-token "a" :expires-at-ms 1000} {:now-ms 0}))))
+  (is (= :decision/refresh (variant (auth/decide {:access-token "a"} {:now-ms 50000 :force? true}))))
+  (is (= :decision/reuse (variant (auth/decide {:access-token "a" :obtained-at-ms 45000} {:now-ms 50000 :force? true}))))
+  (is (auth/decision? (auth/decide nil {:now-ms 0})))
   (testing "refresh saves and returns; reuse makes no request"
     (let [store (ports/atom-store {:k {:access-token "old" :refresh-token "r" :expires-at-ms 100}})
           http  (ports/scripted-http [(json-resp 200 {:access_token "new" :expires_in 3600})])
@@ -148,7 +151,10 @@
     (is (= [1000 1000 6000] @slept) "slow_down adds five seconds")
     (is (= "https://auth.example/device" (:url (first @(:seen http)))))
     (is (str/includes? (:body (second @(:seen http))) "device_code=d")))
-  (is (= :failed (:status (device/poll-outcome (json-resp 400 {:error "access_denied"}) 0)))))
+  (let [outcome (device/classify-poll (json-resp 400 {:error "access_denied"}) 0)]
+    (is (device/poll-outcome? outcome))
+    (is (= :poll/failed (variant outcome)))
+    (is (= :oauth/access_denied (get-in outcome [:error :error])))))
 
 (deftest jwt-and-vendors
   (let [tok (fake-jwt {:exp 100 :chatgpt_account_id "acct"})]

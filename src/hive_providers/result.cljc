@@ -1,46 +1,39 @@
 (ns hive-providers.result
-  "Result values: {:ok v} or {:error category & data}.
+  "Results are hive-dsl's: {:ok v} or {:error category & data}, built and
+   tested by hive-dsl.result (railway-oriented). This namespace re-exports
+   the core operations under the names the library uses and adds the few
+   combinators hive-dsl does not carry (value, chain, of-nilable,
+   unwrap-or). Nothing here throws.
 
-   The same shape as hive-dsl.result, so a caller that already speaks
-   hive-dsl can pass these values through untouched. Nothing here throws.
+   ClojureElisp cannot compile hive-dsl.result's macros yet, so under :cljel
+   the five core operations are defined inline with the same value shape.
 
-   SPDX-License-Identifier: MIT")
+   SPDX-License-Identifier: MIT"
+  (:require #?@(:cljel [] :default [[hive-dsl.result :as dsl]])))
 
-(defn ok
-  "A success carrying V."
-  [v]
-  {:ok v})
-
-(defn err
-  "A failure of CATEGORY (a keyword), with optional DATA merged in."
-  ([category] {:error category})
-  ([category data] (merge {:error category} data)))
-
-(defn ok?
-  "True when R is a success."
-  [r]
-  (and (map? r) (contains? r :ok)))
-
-(defn err?
-  "True when R is a failure."
-  [r]
-  (and (map? r) (contains? r :error)))
+#?(:cljel
+   (do
+     (defn ok [v] {:ok v})
+     (defn err
+       ([category] {:error category})
+       ([category data] (merge {:error category} data)))
+     (defn ok? [r] (and (map? r) (contains? r :ok)))
+     (defn err? [r] (and (map? r) (contains? r :error)))
+     (defn bind [r f] (if (ok? r) (f (:ok r)) r))
+     (defn fmap [r f] (if (ok? r) (ok (f (:ok r))) r)))
+   :default
+   (do
+     (def ok "A success carrying V (hive-dsl.result/ok)." dsl/ok)
+     (def err "A failure of CATEGORY with optional DATA (hive-dsl.result/err)." dsl/err)
+     (def ok? "True when R is a success (hive-dsl.result/ok?)." dsl/ok?)
+     (def err? "True when R is a failure (hive-dsl.result/err?)." dsl/err?)
+     (def bind "F of the value of a success; a failure passes through (hive-dsl.result/bind)." dsl/bind)
+     (def fmap "F applied to the value of a success, rewrapped (hive-dsl.result/map-ok)." dsl/map-ok)))
 
 (defn value
   "The value of a success, else nil."
   [r]
   (:ok r))
-
-(defn bind
-  "F applied to the value of a success (F returns a Result); a failure
-   passes through unchanged."
-  [r f]
-  (if (ok? r) (f (:ok r)) r))
-
-(defn fmap
-  "F applied to the value of a success, rewrapped."
-  [r f]
-  (if (ok? r) (ok (f (:ok r))) r))
 
 (defn chain
   "Thread R through Result-returning FS, stopping at the first failure."

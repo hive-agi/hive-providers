@@ -1,4 +1,6 @@
 {:paths ["src" "test"]
+ :deps  {io.github.hive-agi/hive-dsl {:mvn/version "0.5.36"}
+         metosin/malli {:mvn/version "0.20.2"}}
  :tasks
  {test {:doc  "Run the suite under Babashka"
         :task (exec 'hive-providers.test-runner/-main)}}}
