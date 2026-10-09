@@ -1,0 +1,161 @@
+#!/usr/bin/env bb
+;; Emit the library for a dialect whose toolchain has no reader conditionals.
+;;
+;;   bin/emit-dialect cljel            -> target/cljel/**/*.cljel
+;;   bin/emit-dialect cljel --test     -> emit, compile with clel, load the
+;;                                        result in a batch Emacs and run the
+;;                                        smoke checks in test-cljel/
+;;
+;; Each `#?(...)` / `#?@(...)` in src/**/*.cljc is replaced by the text of the
+;; branch the dialect's reader would pick (first clause whose key is in the
+;; feature set, else :default), so comments, docstrings and layout survive
+;; untouched everywhere else.
+(require '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[clojure.string :as str])
+
+(def dialects
+  {"cljel" {:features #{:cljel} :ext "cljel"}})
+
+;; -----------------------------------------------------------------------------
+;; A scanner that knows strings, chars, comments and brackets: enough to find
+;; the extent of a form without reading it.
+;; -----------------------------------------------------------------------------
+
+(defn skip-string [^String s i]
+  (loop [i (inc i)]
+    (case (.charAt s i)
+      \\ (recur (+ i 2))
+      \" (inc i)
+      (recur (inc i)))))
+
+(defn skip-comment [^String s i]
+  (let [j (str/index-of s "\n" i)] (if j (inc j) (count s))))
+
+(defn skip-char-literal [^String s i]
+  ;; \x, \newline, é ... : a backslash then a token
+  (loop [j (+ i 2)]
+    (if (and (< j (count s))
+             (not (contains? #{\space \newline \tab \( \) \[ \] \{ \} \" \,} (.charAt s j))))
+      (recur (inc j))
+      j)))
+
+(defn skip-ws [^String s i]
+  (loop [i i]
+    (cond
+      (>= i (count s)) i
+      (contains? #{\space \newline \tab \return \,} (.charAt s i)) (recur (inc i))
+      (= \; (.charAt s i)) (recur (skip-comment s i))
+      :else i)))
+
+(declare form-end)
+
+(defn coll-end [^String s i close]
+  (loop [i (skip-ws s i)]
+    (if (= close (.charAt s i))
+      (inc i)
+      (recur (skip-ws s (form-end s i))))))
+
+(defn form-end
+  "Index just past the form starting at I."
+  [^String s i]
+  (let [c (.charAt s i)]
+    (cond
+      (= c \() (coll-end s (inc i) \))
+      (= c \[) (coll-end s (inc i) \])
+      (= c \{) (coll-end s (inc i) \})
+      (= c \") (skip-string s i)
+      (= c \\) (skip-char-literal s i)
+      (contains? #{\' \` \@ \~} c) (form-end s (skip-ws s (if (str/starts-with? (subs s i) "~@") (+ i 2) (inc i))))
+      (= c \^) (form-end s (skip-ws s (form-end s (inc i))))
+      (= c \#) (let [n (.charAt s (inc i))]
+                 (cond
+                   (= n \{) (coll-end s (+ i 2) \})
+                   (= n \() (coll-end s (+ i 2) \))
+                   (= n \") (skip-string s (inc i))
+                   (= n \') (form-end s (+ i 2))
+                   (= n \_) (form-end s (skip-ws s (form-end s (+ i 2))))
+                   (= n \?) (let [j (if (= \@ (.charAt s (+ i 2))) (+ i 3) (+ i 2))]
+                              (coll-end s (inc j) \)))
+                   :else (form-end s (inc i))))
+      :else (loop [j i]
+              (if (and (< j (count s))
+                       (not (contains? #{\space \newline \tab \return \, \( \) \[ \] \{ \} \" \;} (.charAt s j))))
+                (recur (inc j))
+                j)))))
+
+(defn clauses
+  "[[key-text form-text] ...] of the conditional body S[i..end)."
+  [^String s i end]
+  (loop [i (skip-ws s i) acc []]
+    (if (>= i (dec end))
+      acc
+      (let [ke (form-end s i)
+            fs (skip-ws s ke)
+            fe (form-end s fs)]
+        (recur (skip-ws s fe) (conj acc [(subs s i ke) (subs s fs fe)]))))))
+
+(defn pick [cls features]
+  (or (some (fn [[k f]] (when (contains? features (keyword (subs k 1))) f)) cls)
+      (some (fn [[k f]] (when (= k ":default") f)) cls)))
+
+(defn resolve-conditionals
+  "Source S with every reader conditional replaced by its chosen branch."
+  [^String s features]
+  (loop [i 0 out (StringBuilder.)]
+    (if (>= i (count s))
+      (str out)
+      (let [c (.charAt s i)]
+        (cond
+          (= c \") (let [j (skip-string s i)] (recur j (.append out (subs s i j))))
+          (= c \;) (let [j (skip-comment s i)] (recur j (.append out (subs s i j))))
+          (= c \\) (let [j (skip-char-literal s i)] (recur j (.append out (subs s i j))))
+          (str/starts-with? (subs s i (min (count s) (+ i 3))) "#?(")
+          (let [end    (form-end s i)
+                chosen (pick (clauses s (+ i 3) end) features)]
+            (recur end (.append out (resolve-conditionals (or chosen "") features))))
+          (str/starts-with? (subs s i (min (count s) (+ i 4))) "#?@(")
+          (let [end    (form-end s i)
+                chosen (pick (clauses s (+ i 4) end) features)
+                inner  (when chosen (subs chosen 1 (dec (count chosen))))]
+            (recur end (.append out (resolve-conditionals (or inner "") features))))
+          :else (recur (inc i) (.append out c)))))))
+
+(defn emit! [dialect]
+  (let [{:keys [features ext]} (dialects dialect)
+        out-root (fs/path "target" dialect)]
+    (fs/delete-tree out-root)
+    (doseq [f (fs/glob "src" "**.cljc")]
+      (let [rel    (fs/relativize "src" f)
+            target (fs/path out-root (str/replace (str rel) #"\.cljc$" (str "." ext)))]
+        (fs/create-dirs (fs/parent target))
+        (spit (str target) (resolve-conditionals (slurp (str f)) features))))
+    (println "emitted" dialect "->" (str out-root))
+    out-root))
+
+(defn smoke! [out-root]
+  (let [el-root (fs/path "target" "cljel-el")]
+    (fs/delete-tree el-root)
+    (fs/create-dirs el-root)
+    ;; Compile file by file: one namespace clel cannot compile yet must not
+    ;; hide the ones it can. Each failure is reported by name.
+    (doseq [f (sort (map str (fs/glob out-root "**.cljel")))]
+      (let [stem (-> (str (fs/relativize out-root f))
+                     (str/replace #"\.cljel$" "")
+                     (str/replace "/" "-")
+                     (str/replace "_" "-"))
+            {:keys [exit err]} (p/shell {:continue true :out :string :err :string}
+                                        "clel" "compile" f "-o" (str (fs/path el-root (str stem ".el"))))]
+        (when-not (zero? exit)
+          (println "NOT COMPILED" stem ":" (first (str/split-lines (str err)))))))
+    (let [{:keys [exit]} (p/shell {:continue true} "emacs" "--batch" "-L" (str el-root)
+                                  "-l" "test-cljel/smoke.el")]
+      (System/exit exit))))
+
+(let [[dialect & flags] *command-line-args*]
+  (when-not (dialects dialect)
+    (println "usage: bin/emit-dialect <" (str/join "|" (keys dialects)) "> [--test]")
+    (System/exit 2))
+  (let [root (emit! dialect)]
+    (when (some #{"--test"} flags)
+      (smoke! root))))

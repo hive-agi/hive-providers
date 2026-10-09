@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Run the hive-providers suite on every dialect whose runtime is installed.
+#
+#   bin/test-dialects            all dialects found on PATH
+#   bin/test-dialects bb cljw    only the named ones
+#
+# Runtimes and how they are found:
+#   clj    clojure CLI (JVM)            cljs   clojure CLI + node
+#   bb     babashka                     cljw   ClojureWasm (cljw)
+#   cljrs  clojurust ($CLJRS or cljrs)  lpy    Basilisp (basilisp)
+#   cljel  ClojureElisp (clel + emacs), via bin/emit-dialect
+set -u
+cd "$(dirname "$0")/.." || exit 1
+
+CLJRS="${CLJRS:-cljrs}"
+wanted=("$@")
+[ ${#wanted[@]} -eq 0 ] && wanted=(clj bb cljs cljw cljrs lpy cljel)
+
+status=0
+have() { command -v "$1" >/dev/null 2>&1; }
+run() {
+  # Exit codes are not trusted alone: cljs.main exits 0 on test failures.
+  # A run passes when it exits 0 AND its output reports no failure or error.
+  local name=$1; shift
+  local out
+  out=$(mktemp)
+  echo "== $name"
+  "$@" >"$out" 2>&1
+  local code=$?
+  tail -n 25 "$out"
+  if [ $code -eq 0 ] && ! grep -qE ':(fail|error) [1-9]|\b[1-9][0-9]* (failures|errors|failed)' "$out"; then
+    echo "-- $name: ok"
+  else
+    echo "-- $name: FAILED"; status=1
+  fi
+  rm -f "$out"
+}
+
+for d in "${wanted[@]}"; do
+  case "$d" in
+    clj)   have clojure  && run clj   timeout 600 clojure -M:test ;;
+    cljs)  have node     && run cljs  timeout 600 clojure -M:cljs-test ;;
+    bb)    have bb       && run bb    timeout 300 bb test ;;
+    cljw)  have cljw     && run cljw  timeout 300 cljw -cp src:test -m hive-providers.test-runner ;;
+    cljrs) have "$CLJRS" && run cljrs timeout 600 "$CLJRS" test --src-path src --src-path test \
+                              hive-providers.core-test hive-providers.oauth-test hive-providers.openai-test ;;
+    # Basilisp's clojure.test runs under pytest (uv tool install basilisp --with pytest).
+    lpy)   have basilisp && run lpy   timeout 600 basilisp test -p src -p test test/hive_providers/*_test.cljc ;;
+    cljel) have clel     && run cljel bin/emit-dialect cljel --test ;;
+    *)     echo "unknown dialect: $d"; status=1 ;;
+  esac
+done
+exit $status

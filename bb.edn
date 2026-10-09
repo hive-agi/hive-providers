@@ -1,0 +1,4 @@
+{:paths ["src" "test"]
+ :tasks
+ {test {:doc  "Run the suite under Babashka"
+        :task (exec 'hive-providers.test-runner/-main)}}}
