@@ -20,6 +20,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # ClojureScript 1.12.42's Closure Compiler is Java 21 bytecode.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
       - uses: DeLaGuardo/setup-clojure@13.7.0
         with:
           cli: latest
