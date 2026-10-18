@@ -1,0 +1,49 @@
+name: ci
+
+# Pull requests run the same gate release.yml runs, and never publish: the
+# patch bump happens once, when the PR merges into main.
+on:
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # ClojureScript 1.12.42's Closure Compiler is Java 21 bytecode.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: DeLaGuardo/setup-clojure@13.7.0
+        with:
+          cli: latest
+          bb: latest
+
+      - name: Test (clj)
+        run: clojure -M:test
+
+      - name: Test (bb)
+        run: bb test
+
+      # cljs.main exits 0 even when assertions fail, so read the summary.
+      - name: Test (cljs, node)
+        run: |
+          set -euo pipefail
+          clojure -M:cljs-test | tee /tmp/cljs-test.out
+          grep -q ':fail 0, :error 0' /tmp/cljs-test.out
+
+      # The jar must build and carry every source root before a merge can mint it.
+      - name: Jar
+        run: clojure -T:build jar

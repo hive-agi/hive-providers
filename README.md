@@ -131,6 +131,19 @@ bin/test-dialects            # every installed dialect
 bin/test-dialects cljw cljrs # some of them
 ```
 
+## Releases
+
+CI owns `VERSION`. Every push to `main` that touches `src/`, `test/`,
+`deps.edn` or the workflows runs the clj, bb and cljs suites, then
+`clojure -T:build bump :level :patch`, commits `chore(release): X.Y.Z`, tags
+`vX.Y.Z` and deploys to Clojars (`.github/workflows/release.yml`). Pull
+requests run the same suites and build the jar without publishing
+(`.github/workflows/ci.yml`), so a merged PR mints exactly one patch version.
+
+For a minor or major release, set `VERSION` to the new line by hand
+(`0.3.0`); CI publishes the next patch of it (`0.3.1`). Pull before
+touching `VERSION`, since CI's release commits land on `main`.
+
 ## License
 
 MIT. See `LICENSE`.
