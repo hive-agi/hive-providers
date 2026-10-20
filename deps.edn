@@ -9,24 +9,24 @@
  ;; hive-system is PROVIDED scope: only hive-providers.host.hive-system needs
  ;; it, and a consumer that wants that adapter already has it (see README).
  :deps {org.clojure/clojure {:mvn/version "1.12.6"}
-        io.github.hive-agi/hive-dsl {:mvn/version "0.5.36"}
-        metosin/malli {:mvn/version "0.20.2"}}
+        io.github.hive-agi/hive-dsl {:mvn/version "0.5.37"}
+        metosin/malli {:mvn/version "0.20.3"}}
 
  :aliases
  {;; hive-system appears only here: provided scope for host.hive-system.
   :dev  {:extra-paths ["dev" "test"]
-         :extra-deps  {io.github.hive-agi/hive-system {:mvn/version "0.3.14"}}}
+         :extra-deps  {io.github.hive-agi/hive-system {:mvn/version "0.3.22"}}}
 
   :test {:extra-paths ["test"]
          :extra-deps  {io.github.cognitect-labs/test-runner
                        {:git/tag "v0.5.1" :git/sha "dfb30dd"}
-                       io.github.hive-agi/hive-system {:mvn/version "0.3.14"}}
+                       io.github.hive-agi/hive-system {:mvn/version "0.3.22"}}
          :main-opts   ["-m" "cognitect.test-runner"]
          :exec-fn     cognitect.test-runner.api/test}
 
   ;; ClojureScript on Node: clojure -M:cljs-test
   :cljs-test {:extra-paths ["test"]
-              :extra-deps  {org.clojure/clojurescript {:mvn/version "1.12.42"}}
+              :extra-deps  {org.clojure/clojurescript {:mvn/version "1.12.145"}}
               :main-opts   ["-m" "cljs.main" "-re" "node" "-m" "hive-providers.test-runner"]}
 
   ;; Build + Clojars deploy: clojure -T:build jar | clojure -T:build deploy
