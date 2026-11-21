@@ -1,5 +1,5 @@
 {:paths ["src" "test"]
- :deps  {io.github.hive-agi/hive-dsl {:mvn/version "0.5.37"}
+ :deps  {io.github.hive-agi/hive-dsl {:mvn/version "0.6.2"}
          metosin/malli {:mvn/version "0.20.3"}}
  :tasks
  {test {:doc  "Run the suite under Babashka"
