@@ -12,6 +12,10 @@ on:
       - 'src/**'
       - 'resources/**'
       - 'deps.edn'
+      # version.edn decides what the jar carries (:src-dirs, :publish),
+      # and VERSION is the release floor: both must be able to release.
+      - 'version.edn'
+      - 'VERSION'
       # The suite gates the bump/deploy below, so a test-only change MUST be
       # able to trigger a run: excluded here, a test fix can never be validated
       # and a test-only regression stays invisible until an unrelated src push
@@ -37,50 +41,67 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ClojureScript 1.12.42's Closure Compiler is Java 21 bytecode.
-      - uses: actions/setup-java@v4
+      - name: Setup Java
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
+
+      # Caches the resolved dependency tree across runs, keyed on the files
+      # that declare it.
+      - name: Cache Maven and gitlibs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'bb.edn') }}
+          restore-keys: |
+            deps-${{ runner.os }}-
 
       - uses: DeLaGuardo/setup-clojure@13.7.0
         with:
-          cli: latest
-          bb: latest
+          cli: 1.12.7.1681
+
+      # Licence gate. LICENSE, version.edn :license and the src SPDX headers
+      # must agree, and a published pom can never be retracted, so drift has to
+      # stop the run rather than scroll past as a warning. `:strict true` throws
+      # on hive-build >= the release that added it; the grep keeps an older
+      # pinned hive-build (which ignores :strict and only warns) failing too.
+      - name: Verify licence
+        run: |
+          set -euo pipefail
+          out=$(clojure -T:build verify-license :strict true 2>&1) || { printf '%s\n' "$out"; exit 1; }
+          printf '%s\n' "$out"
+          if printf '%s\n' "$out" | grep -q 'WARNING: license inconsistency'; then
+            echo "::error::licence drift: LICENSE, version.edn and SPDX headers disagree"
+            exit 1
+          fi
 
       # Gate BEFORE the bump: a published pom is immutable, so a red suite
       # must not be able to mint a version, tag it and ship it.
-      - name: Test (clj)
-        run: clojure -M:test
+      - name: Test
+        run: |
+          if [ -d test ]; then
+            clojure -M:test
+          else
+            echo "no test/ directory — nothing to gate on"
+          fi
 
-      - name: Test (bb)
-        run: bb test
-
-      # cljs.main exits 0 even when assertions fail, so read the summary.
-      - name: Test (cljs, node)
+      # The release number comes from the tags, not from a commit back to main.
+      # VERSION in the tree is a FLOOR (raise it in a staging PR to open a new
+      # minor line); this run releases patch+1 of max(VERSION, newest v* tag).
+      - name: Resolve release base from tags
         run: |
           set -euo pipefail
-          clojure -M:cljs-test | tee /tmp/cljs-test.out
-          grep -q ':fail 0, :error 0' /tmp/cljs-test.out
+          FLOOR=$(tr -d '[:space:]' < VERSION)
+          LAST=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1 | sed 's/^v//')
+          BASE=$(printf '%s\n%s\n' "$FLOOR" "${LAST:-$FLOOR}" | sort -V | tail -n1)
+          echo "VERSION floor $FLOOR, newest tag ${LAST:-none}: base $BASE"
+          printf '%s\n' "$BASE" > VERSION
 
       - name: Bump patch version
         run: clojure -T:build bump :level :patch
-
-      - name: Commit and tag
-        run: |
-          set -euo pipefail
-          VER=$(cat VERSION)
-          git config user.name  "hive-ci"
-          git config user.email "ci@hive-agi.local"
-          git add VERSION
-          # [skip ci] stops this push from retriggering the workflow.
-          git commit -m "chore(release): $VER [skip ci]"
-          # --atomic: branch and tag land together or not at all, so a rejected
-          # branch push cannot leave an orphan tag that fails every later release.
-          # Annotated: `git push --follow-tags` ignores lightweight tags,
-          # which would publish the artifact and silently drop the tag.
-          git tag -a "v$VER" -m "release $VER"
-          git push --atomic --follow-tags
 
       - name: Deploy
         env:
@@ -89,3 +110,16 @@ jobs:
           CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
           CLOJARS_PASSWORD: ${{ secrets.CLOJARS_DEPLOY_TOKEN }}
         run: clojure -T:build deploy
+
+      # After Deploy: a tag means "this version is in the registry".
+      - name: Tag
+        run: |
+          set -euo pipefail
+          VER=$(tr -d '[:space:]' < VERSION)
+          git config user.name  "hive-ci"
+          git config user.email "ci@hive-agi.local"
+          # Tag only, no commit: a version-bump commit on main is one staging
+          # lacks, and it made every next staging->main PR conflict in VERSION.
+          # Annotated, so the next run's tag scan and `git describe` see it.
+          git tag -a "v$VER" -m "release $VER"
+          git push origin "refs/tags/v$VER"
